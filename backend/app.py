@@ -7,7 +7,13 @@ import threading
 import time
 from functools import wraps
 
-from film_engine import process_image, get_default_params
+from film_engine import (
+    process_image,
+    get_default_params,
+    extract_dominant_colors,
+    compute_color_signature,
+    match_films
+)
 from db import (
     init_db,
     list_recipes,
@@ -231,6 +237,154 @@ def process_base64():
         
         return jsonify({
             "image": f"data:image/jpeg;base64,{result_b64}"
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analyze-colors", methods=["POST"])
+def analyze_colors():
+    """
+    Analyze image colors and extract dominant colors.
+    Accepts: multipart form with 'image' file
+    Returns: color analysis result with dominant colors and signature
+    """
+    try:
+        if "image" not in request.files:
+            return jsonify({"error": "No image file provided"}), 400
+        
+        image_file = request.files["image"]
+        if image_file.filename == "":
+            return jsonify({"error": "No selected file"}), 400
+        
+        image_bytes = image_file.read()
+        
+        dominant_colors = extract_dominant_colors(image_bytes, num_colors=3)
+        signature = compute_color_signature(image_bytes)
+        
+        return jsonify({
+            "dominant_colors": dominant_colors,
+            "signature": signature
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analyze-colors/base64", methods=["POST"])
+def analyze_colors_base64():
+    """
+    Analyze image colors with base64 input.
+    Accepts: JSON with 'image' (base64 string)
+    Returns: color analysis result
+    """
+    try:
+        data = request.get_json()
+        if not data or "image" not in data:
+            return jsonify({"error": "No image data provided"}), 400
+        
+        image_b64 = data["image"]
+        if "," in image_b64:
+            image_b64 = image_b64.split(",", 1)[1]
+        
+        image_bytes = base64.b64decode(image_b64)
+        
+        dominant_colors = extract_dominant_colors(image_bytes, num_colors=3)
+        signature = compute_color_signature(image_bytes)
+        
+        return jsonify({
+            "dominant_colors": dominant_colors,
+            "signature": signature
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/match-film", methods=["POST"])
+def match_film():
+    """
+    Analyze image and match to similar film stock.
+    Accepts: multipart form with 'image' file
+    Returns: matched films with similarity scores
+    """
+    try:
+        if "image" not in request.files:
+            return jsonify({"error": "No image file provided"}), 400
+        
+        image_file = request.files["image"]
+        if image_file.filename == "":
+            return jsonify({"error": "No selected file"}), 400
+        
+        image_bytes = image_file.read()
+        
+        signature = compute_color_signature(image_bytes)
+        dominant_colors = extract_dominant_colors(image_bytes, num_colors=3)
+        matches = match_films(signature, top_n=5)
+        
+        clean_matches = []
+        for m in matches:
+            clean_matches.append({
+                "name": m["name"],
+                "similarity_score": m["similarity_score"],
+                "description": m["description"]
+            })
+        
+        return jsonify({
+            "dominant_colors": dominant_colors,
+            "signature": {
+                "warmness": round(signature.get("warmness", 0), 2),
+                "saturation_avg": round(signature.get("saturation_avg", 0), 2),
+                "brightness_avg": round(signature.get("brightness_avg", 0), 2),
+                "color_variance": round(signature.get("color_variance", 0), 2)
+            },
+            "matches": clean_matches
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/match-film/base64", methods=["POST"])
+def match_film_base64():
+    """
+    Analyze image and match film with base64 input.
+    Accepts: JSON with 'image' (base64 string)
+    Returns: matched films
+    """
+    try:
+        data = request.get_json()
+        if not data or "image" not in data:
+            return jsonify({"error": "No image data provided"}), 400
+        
+        image_b64 = data["image"]
+        if "," in image_b64:
+            image_b64 = image_b64.split(",", 1)[1]
+        
+        image_bytes = base64.b64decode(image_b64)
+        
+        signature = compute_color_signature(image_bytes)
+        dominant_colors = extract_dominant_colors(image_bytes, num_colors=3)
+        matches = match_films(signature, top_n=5)
+        
+        clean_matches = []
+        for m in matches:
+            clean_matches.append({
+                "name": m["name"],
+                "similarity_score": m["similarity_score"],
+                "description": m["description"]
+            })
+        
+        return jsonify({
+            "dominant_colors": dominant_colors,
+            "signature": {
+                "warmness": round(signature.get("warmness", 0), 2),
+                "saturation_avg": round(signature.get("saturation_avg", 0), 2),
+                "brightness_avg": round(signature.get("brightness_avg", 0), 2),
+                "color_variance": round(signature.get("color_variance", 0), 2)
+            },
+            "matches": clean_matches
         })
     except Exception as e:
         traceback.print_exc()
