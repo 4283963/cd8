@@ -30,6 +30,9 @@ function App() {
   const [compareMode, setCompareMode] = useState(false)
   const debounceRef = useRef(null)
   const imageFileRef = useRef(null)
+  const abortControllerRef = useRef(null)
+  const requestVersionRef = useRef(0)
+  const processedImageUrlRef = useRef(null)
 
   useEffect(() => {
     fetchRecipes()
@@ -59,6 +62,15 @@ function App() {
   const processImage = useCallback(async (imageData, currentParams) => {
     if (!imageData) return
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
+    const myVersion = ++requestVersionRef.current
+
     setIsProcessing(true)
 
     try {
@@ -68,18 +80,42 @@ function App() {
 
       const res = await fetch('/api/process', {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal: abortController.signal
       })
+
+      if (myVersion !== requestVersionRef.current) {
+        return
+      }
 
       if (res.ok) {
         const blob = await res.blob()
+
+        if (myVersion !== requestVersionRef.current) {
+          return
+        }
+
         const url = URL.createObjectURL(blob)
+
+        if (processedImageUrlRef.current) {
+          URL.revokeObjectURL(processedImageUrlRef.current)
+        }
+        processedImageUrlRef.current = url
+
         setProcessedImage(url)
       }
     } catch (e) {
+      if (e.name === 'AbortError') {
+        return
+      }
       console.error('Processing failed:', e)
     } finally {
-      setIsProcessing(false)
+      if (myVersion === requestVersionRef.current) {
+        setIsProcessing(false)
+      }
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null
+      }
     }
   }, [])
 
@@ -89,14 +125,43 @@ function App() {
     }
     debounceRef.current = setTimeout(() => {
       processImage(imageData, currentParams)
-    }, 150)
+    }, 300)
   }, [processImage])
 
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+      if (processedImageUrlRef.current) {
+        URL.revokeObjectURL(processedImageUrlRef.current)
+      }
+    }
+  }, [])
+
   const handleImageUpload = (file, dataUrl) => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    requestVersionRef.current = 0
+
     imageFileRef.current = file
     setOriginalImage(dataUrl)
     setProcessedImage(null)
     setSelectedRecipeId(null)
+
+    if (processedImageUrlRef.current) {
+      URL.revokeObjectURL(processedImageUrlRef.current)
+      processedImageUrlRef.current = null
+    }
+
     processImage(file, params)
   }
 
@@ -137,6 +202,10 @@ function App() {
   }
 
   const handleReset = () => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
     setParams(DEFAULT_PARAMS)
     setSelectedRecipeId(null)
     if (imageFileRef.current) {

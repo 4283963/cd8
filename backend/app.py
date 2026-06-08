@@ -3,6 +3,9 @@ from flask_cors import CORS
 import io
 import base64
 import traceback
+import threading
+import time
+from functools import wraps
 
 from film_engine import process_image, get_default_params
 from db import (
@@ -21,6 +24,45 @@ app = Flask(__name__)
 CORS(app, max_age=3600)
 
 init_db()
+
+MAX_CONCURRENT_PROCESS = 2
+process_semaphore = threading.Semaphore(MAX_CONCURRENT_PROCESS)
+pending_requests = 0
+pending_lock = threading.Lock()
+
+PROCESS_TIMEOUT = 30
+
+
+def limit_concurrency(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        global pending_requests
+
+        with pending_lock:
+            if pending_requests >= MAX_CONCURRENT_PROCESS * 3:
+                return jsonify({
+                    "error": "Server is busy. Please try again later.",
+                    "code": "TOO_MANY_REQUESTS"
+                }), 429
+            pending_requests += 1
+
+        try:
+            acquired = process_semaphore.acquire(timeout=PROCESS_TIMEOUT)
+            if not acquired:
+                return jsonify({
+                    "error": "Processing timeout. Server is too busy.",
+                    "code": "TIMEOUT"
+                }), 503
+
+            try:
+                return f(*args, **kwargs)
+            finally:
+                process_semaphore.release()
+        finally:
+            with pending_lock:
+                pending_requests -= 1
+
+    return decorated
 
 
 @app.route("/api/health", methods=["GET"])
@@ -113,6 +155,7 @@ def get_default():
 
 
 @app.route("/api/process", methods=["POST"])
+@limit_concurrency
 def process():
     """
     Process image with film simulation parameters.
@@ -156,6 +199,7 @@ def process():
 
 
 @app.route("/api/process/base64", methods=["POST"])
+@limit_concurrency
 def process_base64():
     """
     Process image with base64 input/output.
